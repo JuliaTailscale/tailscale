@@ -384,6 +384,7 @@ func startIPNServer(ctx context.Context, logid string) error {
 	if err != nil {
 		return fmt.Errorf("safesocket.Listen: %v", err)
 	}
+	defer ln.Close()
 
 	err = ipnserver.Run(ctx, logf, ln, store, linkMon, dialer, logid, getEngine, ipnServerOpts())
 	if err != nil {

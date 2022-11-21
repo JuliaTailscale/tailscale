@@ -45,7 +45,6 @@ import (
 	"tailscale.com/smallzstd"
 	"tailscale.com/types/logger"
 	"tailscale.com/util/groupmember"
-	"tailscale.com/util/pidowner"
 	"tailscale.com/util/systemd"
 	"tailscale.com/util/winutil"
 	"tailscale.com/version"
@@ -132,55 +131,6 @@ type connIdentity struct {
 	Pid    int
 	UserID string
 	User   *user.User
-}
-
-// getConnIdentity returns the localhost TCP connection's identity information
-// (pid, userid, user). If it's not Windows (for now), it returns a nil error
-// and a ConnIdentity with NotWindows set true. It's only an error if we expected
-// to be able to map it and couldn't.
-func (s *Server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
-	ci = connIdentity{Conn: c}
-	if runtime.GOOS != "windows" { // for now; TODO: expand to other OSes
-		ci.NotWindows = true
-		_, ci.IsUnixSock = c.(*net.UnixConn)
-		ci.Creds, _ = peercred.Get(c)
-		return ci, nil
-	}
-	la, err := netip.ParseAddrPort(c.LocalAddr().String())
-	if err != nil {
-		return ci, fmt.Errorf("parsing local address: %w", err)
-	}
-	ra, err := netip.ParseAddrPort(c.RemoteAddr().String())
-	if err != nil {
-		return ci, fmt.Errorf("parsing local remote: %w", err)
-	}
-	if !la.Addr().IsLoopback() || !ra.Addr().IsLoopback() {
-		return ci, errors.New("non-loopback connection")
-	}
-	tab, err := netstat.Get()
-	if err != nil {
-		return ci, fmt.Errorf("failed to get local connection table: %w", err)
-	}
-	pid := peerPid(tab.Entries, la, ra)
-	if pid == 0 {
-		return ci, errors.New("no local process found matching localhost connection")
-	}
-	ci.Pid = pid
-	uid, err := pidowner.OwnerOfPID(pid)
-	if err != nil {
-		var hint string
-		if runtime.GOOS == "windows" {
-			hint = " (WSL?)"
-		}
-		return ci, fmt.Errorf("failed to map connection's pid to a user%s: %w", hint, err)
-	}
-	ci.UserID = uid
-	u, err := lookupUserFromID(s.logf, uid)
-	if err != nil {
-		return ci, fmt.Errorf("failed to look up user from userid: %w", err)
-	}
-	ci.User = u
-	return ci, nil
 }
 
 func lookupUserFromID(logf logger.Logf, uid string) (*user.User, error) {

@@ -5,18 +5,18 @@
 package safesocket
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"syscall"
+	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+	"golang.zx2c4.com/wireguard/ipc/namedpipe"
 )
 
 func connect(s *ConnectionStrategy) (net.Conn, error) {
-	pipe, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", s.port))
-	if err != nil {
-		return nil, err
-	}
-	return pipe, err
+	return namedpipe.DialTimeout(s.path, time.Second)
 }
 
 func setFlags(network, address string, c syscall.RawConn) error {
@@ -26,20 +26,46 @@ func setFlags(network, address string, c syscall.RawConn) error {
 	})
 }
 
-// TODO(apenwarr): use named pipes instead of sockets?
-//
-//	I tried to use winio.ListenPipe() here, but that code is a disaster,
-//	built on top of an API that's a disaster. So for now we'll hack it by
-//	just always using a TCP session on a fixed port on localhost. As a
-//	result, on Windows we ignore the vendor and name strings.
-//	NOTE(bradfitz): Jason did a new pipe package: https://go-review.googlesource.com/c/sys/+/299009
 func listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) {
-	lc := net.ListenConfig{
-		Control: setFlags,
+	// Construct the default named pipe security descriptor.
+	var acl *windows.ACL
+	if err := windows.RtlDefaultNpAcl(&acl); err != nil {
+		return nil, 0, err
 	}
-	pipe, err := lc.Listen(context.Background(), "tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	defer windows.LocalFree(windows.Handle(unsafe.Pointer(acl)))
+	sd, err := windows.NewSecurityDescriptor()
 	if err != nil {
 		return nil, 0, err
 	}
-	return pipe, uint16(pipe.Addr().(*net.TCPAddr).Port), err
+
+	allUsers, err := windows.CreateWellKnownSid(windows.WinBuiltinUsersSid)
+	if err != nil {
+		return nil, 0, err
+	}
+	ea := windows.EXPLICIT_ACCESS{
+		AccessPermissions: windows.GENERIC_READ | windows.GENERIC_WRITE,
+		AccessMode:        windows.SET_ACCESS,
+		Trustee: windows.TRUSTEE{
+			TrusteeType:  windows.TRUSTEE_IS_WELL_KNOWN_GROUP,
+			TrusteeValue: windows.TrusteeValueFromSID(allUsers),
+		},
+	}
+	acl, err = windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{ea}, acl)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if err = sd.SetDACL(acl, true, false); err != nil {
+		return nil, 0, err
+	}
+	cfg := namedpipe.ListenConfig{
+		SecurityDescriptor: sd,
+		InputBufferSize:    256 * 1024,
+		OutputBufferSize:   256 * 1024,
+	}
+	lc, err := cfg.Listen(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("namedpipe.Listen: %w", err)
+	}
+	return lc, 0, nil
 }
