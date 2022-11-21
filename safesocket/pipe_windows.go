@@ -8,15 +8,14 @@ import (
 	"fmt"
 	"net"
 	"syscall"
-	"time"
 	"unsafe"
 
+	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
-	"golang.zx2c4.com/wireguard/ipc/namedpipe"
 )
 
 func connect(s *ConnectionStrategy) (net.Conn, error) {
-	return namedpipe.DialTimeout(s.path, time.Second)
+	return winio.DialPipe(s.path, nil)
 }
 
 func setFlags(network, address string, c syscall.RawConn) error {
@@ -58,12 +57,14 @@ func listen(path string, port uint16) (_ net.Listener, gotPort uint16, _ error) 
 	if err = sd.SetDACL(acl, true, false); err != nil {
 		return nil, 0, err
 	}
-	cfg := namedpipe.ListenConfig{
-		SecurityDescriptor: sd,
-		InputBufferSize:    256 * 1024,
-		OutputBufferSize:   256 * 1024,
-	}
-	lc, err := cfg.Listen(path)
+	lc, err := winio.ListenPipe(
+		path,
+		&winio.PipeConfig{
+			SecurityDescriptor: sd.String(),
+			InputBufferSize:    256 * 1024,
+			OutputBufferSize:   256 * 1024,
+		},
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("namedpipe.Listen: %w", err)
 	}

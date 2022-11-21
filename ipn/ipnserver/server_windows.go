@@ -33,12 +33,12 @@ func getNamedPipeClientProcessId(h windows.Handle) (pid uint32, err error) {
 func (s *Server) getConnIdentity(c net.Conn) (ci connIdentity, err error) {
 	ci = connIdentity{Conn: c}
 	h, ok := c.(interface {
-		Handle() windows.Handle
+		Fd() uintptr
 	})
 	if !ok {
 		return ci, fmt.Errorf("not a windows handle: %T", c)
 	}
-	pid, err := getNamedPipeClientProcessId(h.Handle())
+	pid, err := getNamedPipeClientProcessId(windows.Handle(h.Fd()))
 	if err != nil {
 		return ci, fmt.Errorf("getNamedPipeClientProcessId: %v", err)
 	}
